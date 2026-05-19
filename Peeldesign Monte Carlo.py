@@ -118,10 +118,223 @@ class Case:
 
         return price
 
+    def cost_breakdown(self,
+        storage = None,
+        transport_cost = None,
+        coating_cost = None,
+        decoating_time = None,
+        rental_cost = None,
+        max_uses = None,
+        peelcoating_price = None,
+                  ):
+
+        # Use simulated values if provided, otherwise fall back to object defaults
+        storage = self.storage if storage is None else storage / pallet_size
+        transport_cost = self.transport_cost if transport_cost is None else transport_cost / pallet_size
+        coating_cost = self.coating_cost if coating_cost is None else coating_cost
+        decoating_time = self.decoating_time if decoating_time is None else decoating_time
+        rental_cost = self.rental_cost if rental_cost is None else rental_cost
+        max_uses = self.max_uses if max_uses is None else max_uses
+        peelcoating_price = self.peelcoating_price if peelcoating_price is None else peelcoating_price
+
+        if self.powder:
+            purchase = self.purchase  + coating_cost + storage + transport_cost
+            purchase = purchase * np.ceil(uses / max_uses)
+        else:
+            purchase = self.purchase * np.ceil(uses / max_uses)
+
+        storage_total = self.storage_months*storage*years
+
+        if self.coating_internal:
+            coating_cost_total = self.yearly_uses * ((hourly_rate*peel_coating_time + 4*peelcoating_price)/4)
+        elif self.powder:
+            coating_cost_total = 0
+        else:
+            coating_cost_total = coating_cost*self.yearly_uses
+        coating_cost_total = coating_cost_total*years
+
+        transport_total = transport_cost*self.transport_amount*self.yearly_uses*years
+        rental_total = rental_cost*self.yearly_uses*years
+        decoating_total = (decoating_time/60)*hourly_rate*self.yearly_uses*years
+
+        return {
+            "Purchase": purchase,
+            "Storage": storage_total,
+            "Transport": transport_total,
+            "Coating": coating_cost_total,
+            "Decoating": decoating_total,"Rental": rental_total,
+            
+        }
+
+    @staticmethod
+    def plot_cost_build_up(cases, show=True, **cost_inputs):
+        cost_build_up = pd.DataFrame({
+            case.name: case.cost_breakdown(**cost_inputs)
+            for case in cases
+        }).T
+
+        colours = {
+            "A": "#2d1329",
+            "B": "#ff4200",
+            "C": "#75008D",
+            "D": "#00008D",
+            "E": "#006872",
+            "F": "#95a3a6",
+            "G": "#ffb9ca",
+            "H": "#d6beff",
+            "I": "#98beff",
+            "J": "#94fff2",
+            "K": "#c0022f",
+        }
+        cost_colours = {
+            "Storage": colours["A"],
+            "Coating": colours["B"],
+            "Purchase": colours["C"],
+            "Transport": colours["D"],
+            "Decoating": colours["E"],
+            "Rental": colours["F"],
+        }
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bottom = np.zeros(len(cost_build_up))
+
+        for cost_part in cost_build_up.columns:
+            values = cost_build_up[cost_part].to_numpy()
+            ax.bar(
+                cost_build_up.index,
+                values,
+                bottom=bottom,
+                label=cost_part,
+                color=cost_colours.get(cost_part),
+            )
+            bottom += values
+
+        for case_idx, total in enumerate(bottom):
+            ax.text(case_idx, total, f"{total:.0f}", ha="center", va="bottom", fontsize=9)
+
+        ax.set_xlabel("Case")
+        ax.set_ylabel("Cost")
+        ax.set_title("Cost build-up per case")
+        ax.set_ylim(0,5000)
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.set_axisbelow(True)
+        ax.legend(title="Cost part")
+
+        fig.tight_layout()
+
+        if show:
+            plt.show()
+
+        return fig, ax, cost_build_up
+
+    def plot_cost_below_cutoff(
+            self,
+            cutoff,
+            max_uses_slices=None,
+            transport_slices=None,
+            peelcoating_values=None,
+            decoating_values=None,
+            storage=5,
+            show=True,
+    ):
+        max_uses_slices = [120, 96, 48, 24, 12, 6] if max_uses_slices is None else max_uses_slices
+        transport_slices = {
+            "Low transport": 60,
+            "Mid transport": 85,
+            "High transport": 120,
+        } if transport_slices is None else transport_slices
+        peelcoating_values = np.linspace(1.5, 15, 80) if peelcoating_values is None else peelcoating_values
+        decoating_values = np.linspace(1, 14, 80) if decoating_values is None else decoating_values
+
+        cmap = plt.cm.RdYlGn_r  # reversed so green = low, red = high
+        norm = mcolors.Normalize(vmin=1600, vmax=cutoff)
+
+        fig, axes = plt.subplots(
+            nrows=len(max_uses_slices),
+            ncols=len(transport_slices),
+            figsize=(15, 22),
+            sharex=True,
+            sharey=True,
+        )
+
+        axes = np.asarray(axes).reshape(len(max_uses_slices), len(transport_slices))
+        im = None
+
+        for row_idx, max_uses in enumerate(max_uses_slices):
+            for col_idx, (transport_label, transport_cost) in enumerate(transport_slices.items()):
+
+                Z = np.zeros((len(decoating_values), len(peelcoating_values)))
+
+                for i, decoating_time in enumerate(decoating_values):
+                    for j, peelcoating_price in enumerate(peelcoating_values):
+
+                        price = self.calc_cost(
+                            peelcoating_price=peelcoating_price,
+                            decoating_time=decoating_time,
+                            transport_cost=transport_cost,
+                            max_uses=max_uses,
+                            storage=storage,
+                        )
+
+                        # Hide values above cutoff
+                        if price > cutoff:
+                            Z[i, j] = np.nan
+                        else:
+                            Z[i, j] = price
+
+                ax = axes[row_idx, col_idx]
+
+                im = ax.imshow(
+                    Z,
+                    origin="lower",
+                    aspect="auto",
+                    extent=[
+                        peelcoating_values.min(),
+                        peelcoating_values.max(),
+                        decoating_values.min(),
+                        decoating_values.max(),
+                    ],
+                    cmap=cmap,
+                    norm=norm,
+                )
+
+                ax.set_title(f"{transport_label} | max uses = {max_uses}")
+
+                x_ticks = np.linspace(peelcoating_values.min(), peelcoating_values.max(), 6)
+                y_ticks = np.linspace(decoating_values.min(), decoating_values.max(), 6)
+
+                ax.set_xticks(x_ticks)
+                ax.set_yticks(y_ticks)
+
+                ax.grid(True, which='major', color='black', linestyle='-', linewidth=0.5, alpha=0.3)
+
+                # Optional: mark base values
+                ax.axvline(2.3375, linestyle="--", linewidth=1)
+                ax.axhline(7, linestyle="--", linewidth=1)
+
+        fig.subplots_adjust(right=0.88, hspace=0.35, wspace=0.15)
+
+        cbar_ax = fig.add_axes([0.9, 0.15, 0.02, 0.7])
+        fig.colorbar(im, cax=cbar_ax, label="Total price")
+
+        fig.text(0.5, 0.04, "Peelcoating price", ha="center", fontsize=12)
+        fig.text(0.04, 0.5, "Decoating time (min)", va="center", rotation="vertical", fontsize=12)
+
+        fig.suptitle(
+            f"Case {self.name} total price below cutoff ({cutoff})",
+            fontsize=16,
+            y=0.995,
+        )
+
+        if show:
+            plt.show()
+
+        return fig, axes
+
 
 a = Case("A", coating_internal=True, transport_amount=2)
 b = Case("B", coating_cost=15, transport_amount=3)
-c = Case("C", rental_cost=19, coating_internal=True, transport_amount=2)
+c = Case("C", rental_cost=19, coating_internal=True, transport_amount=0, storage=0, purchase=0)
 d = Case("D", yearly_uses=6, max_uses=6, powder=True, transport_amount=2, decoating_time=0, coating_cost=9)
 e = Case("E", coating_cost=0, transport_amount=2, decoating_time=0)
 
@@ -130,6 +343,7 @@ print(f'{d.calc_cost()}')
 
 
 cases = [a, b, c, d, e]
+Case.plot_cost_build_up(cases)
 """
 def sample_pert(minimum, mode, maximum, lamb=4):
     alpha = 1 + lamb * (mode - minimum) / (maximum - minimum)
@@ -231,112 +445,5 @@ for case in ["A","B","C","D","E"]:
     print(df[inputs + [case]].corr()[case].drop(case).sort_values(ascending=False))
 """
 
-# -----------------------
-# Settings
-# -----------------------
 
-cutoff = 4373.75
-
-max_uses_slices = [120, 96, 48, 24, 12, 6]
-
-transport_slices = {
-    "Low transport": 60,
-    "Mid transport": 85,
-    "High transport": 120,
-}
-
-peelcoating_values = np.linspace(1.5, 15, 80)
-decoating_values = np.linspace(1, 14, 80)
-
-# -----------------------
-# Build plot
-# -----------------------
-
-cmap = plt.cm.RdYlGn_r  # reversed so green = low, red = high
-
-norm = mcolors.Normalize(vmin=1600, vmax=cutoff)
-
-fig, axes = plt.subplots(
-    nrows=len(max_uses_slices),
-    ncols=len(transport_slices),
-    figsize=(15, 22),
-    sharex=True,
-    sharey=True,
-)
-
-# shared color scale below cutoff
-vmin = 0
-vmax = cutoff
-
-for row_idx, max_uses in enumerate(max_uses_slices):
-    for col_idx, (transport_label, transport_cost) in enumerate(transport_slices.items()):
-
-        Z = np.zeros((len(decoating_values), len(peelcoating_values)))
-
-        for i, decoating_time in enumerate(decoating_values):
-            for j, peelcoating_price in enumerate(peelcoating_values):
-
-                price = a.calc_cost(
-                    peelcoating_price=peelcoating_price,
-                    decoating_time=decoating_time,
-                    transport_cost=transport_cost,
-                    max_uses=max_uses,
-                    storage=5,
-                )
-
-                # Hide values above cutoff
-                if price > cutoff:
-                    Z[i, j] = np.nan
-                else:
-                    Z[i, j] = price
-
-        ax = axes[row_idx, col_idx]
-
-        im = ax.imshow(
-            Z,
-            origin="lower",
-            aspect="auto",
-            extent=[
-                peelcoating_values.min(),
-                peelcoating_values.max(),
-                decoating_values.min(),
-                decoating_values.max(),
-            ],
-            cmap=cmap,
-            norm=norm,
-        )
-
-        ax.set_title(f"{transport_label} | max uses = {max_uses}")
-
-
-        x_ticks = np.linspace(peelcoating_values.min(), peelcoating_values.max(), 6)
-        y_ticks = np.linspace(decoating_values.min(), decoating_values.max(), 6)
-
-        ax.set_xticks(x_ticks)
-        ax.set_yticks(y_ticks)
-
-        ax.grid(True, which='major', color='black', linestyle='-', linewidth=0.5, alpha=0.3)
-
-        # Optional: mark base values
-        ax.axvline(2.3375, linestyle="--", linewidth=1)
-        ax.axhline(7, linestyle="--", linewidth=1)
-
-# -----------------------
-# Shared colorbar
-# -----------------------
-
-fig.subplots_adjust(right=0.88, hspace=0.35, wspace=0.15)
-
-cbar_ax = fig.add_axes([0.9, 0.15, 0.02, 0.7])
-fig.colorbar(im, cax=cbar_ax, label="Total price")
-
-fig.text(0.5, 0.04, "Peelcoating price", ha="center", fontsize=12)
-fig.text(0.04, 0.5, "Decoating time (min)", va="center", rotation="vertical", fontsize=12)
-
-fig.suptitle(
-    f"Case A total price below cutoff ({cutoff})",
-    fontsize=16,
-    y=0.995,
-)
-
-plt.show()
+# a.plot_cost_below_cutoff(cutoff=4373.75)
