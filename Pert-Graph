@@ -1,0 +1,44 @@
+import math
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def pert_pdf(x, minimum, mode, maximum, lamb=4):
+    alpha = 1 + lamb * (mode - minimum) / (maximum - minimum)
+    beta = 1 + lamb * (maximum - mode) / (maximum - minimum)
+    scaled_x = (x - minimum) / (maximum - minimum)
+
+    log_beta = math.lgamma(alpha) + math.lgamma(beta) - math.lgamma(alpha + beta)
+    beta_pdf = np.exp(
+        (alpha - 1) * np.log(scaled_x)
+        + (beta - 1) * np.log(1 - scaled_x)
+        - log_beta
+    )
+
+    return beta_pdf / (maximum - minimum)
+
+
+minimum = 5
+mode = 9
+maximum = 20
+lamb = 4
+
+x = np.linspace(minimum, maximum, 500)
+x = x[1:-1]  # avoid log(0) at the exact endpoints
+y = pert_pdf(x, minimum, mode, maximum, lamb)
+
+plt.figure(figsize=(8, 4.5))
+plt.plot(x, y, linewidth=2.5, color="#006872")
+
+plt.axvline(minimum, color="#75008D", linestyle="--", linewidth=1.5, label=f"Minimum = {minimum}")
+plt.axvline(mode, color="#ff4200", linestyle="--", linewidth=1.5, label=f"Mode = {mode}")
+plt.axvline(maximum, color="#75008D", linestyle="--", linewidth=1.5, label=f"Maximum = {maximum}")
+
+plt.title("PERT Distribution")
+plt.xlabel("Powder Coating Cost")
+plt.ylabel("Probability density")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.tight_layout()
+plt.show()
